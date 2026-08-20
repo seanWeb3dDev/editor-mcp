@@ -3,35 +3,75 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { sendCommand, getConnectedProjects } from "../connection/ws-server.js";
+import { sendCommand, getConnectedProjects, isProjectConnected } from "../connection/ws-server.js";
 import { z } from "zod";
 import type { ToolLogger } from "./index.js";
+
+/**
+ * 连接 ID 脱敏：保留首尾字符，中间用 *** 替代，避免完整 ID 泄露
+ */
+function maskProjectId(id: string): string {
+  if (id.length <= 2) return id[0] + "***";
+  return id[0] + "***" + id[id.length - 1];
+}
 
 /**
  * 注册场景相关工具
  */
 export function registerSceneTools(server: McpServer, logger?: ToolLogger) {
-  // get_connected_projects 工具
+  // get_connected_projects 工具（出于安全考虑，仅返回脱敏后的 ID，不可用于直接控制编辑器）
   server.registerTool(
     "get_connected_projects",
     {
       title: "获取已连接项目",
-      description: "获取当前已连接到 MCP Server 的所有编辑器实例列表（用户在编辑器顶部栏 MCP 连接时输入的连接 ID），用于确定可以操作的编辑器",
+      description: "获取当前已连接到 MCP Server 的编辑器实例数量及脱敏后的连接 ID 列表（出于安全考虑，ID 已脱敏，无法直接用于控制编辑器）。主要用于排查编辑器是否已成功连接",
       inputSchema: {},
     },
     async () => {
       logger?.("get_connected_projects", {});
       const projects = getConnectedProjects();
+      const maskedProjects = projects.map(maskProjectId);
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify({
-              projects,
+              projects: maskedProjects,
               total: projects.length,
               hint: projects.length > 0
-                ? "使用 get_scene_info 工具传入 projectId（连接 ID）获取场景信息"
+                ? "出于安全考虑，列表仅展示脱敏后的连接 ID。如需操作编辑器，请向用户索取完整连接 ID（用户在编辑器顶部栏 MCP 连接时输入的 ID），并先用 verify_project 工具验证通过后再调用其他工具"
                 : "没有编辑器连接，请先在编辑器顶部栏点击 MCP 按钮连接",
+            }, null, 2),
+          },
+        ],
+      };
+    }
+  );
+
+  // verify_project 工具
+  server.registerTool(
+    "verify_project",
+    {
+      title: "验证连接 ID",
+      description: `验证用户提供的连接 ID 是否匹配到已连接的编辑器。只有验证通过，才能通过其他工具控制该编辑器。
+
+**何时使用**：在操作任何编辑器之前必须先调用本工具验证。projectId 必须是用户主动提供的完整连接 ID（用户在编辑器顶部栏点击 MCP 按钮连接时输入的 ID），不可从 get_connected_projects 获取（该工具仅返回脱敏 ID）。`,
+      inputSchema: {
+        projectId: z.string().describe("用户主动提供的完整连接 ID（编辑器 MCP 连接时输入）"),
+      },
+    },
+    async ({ projectId }) => {
+      logger?.("verify_project", { projectId });
+      const verified = isProjectConnected(projectId);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              verified,
+              message: verified
+                ? `验证成功：连接 ID ${projectId} 匹配到在线编辑器，可以使用 projectId 调用其他工具对其进行操作`
+                : "验证失败：未找到匹配的编辑器。请确认用户提供的连接 ID 是否正确（应与用户在编辑器顶部栏 MCP 连接时输入的 ID 完全一致），也可调用 get_connected_projects 查看脱敏 ID 以辅助核对",
             }, null, 2),
           },
         ],
@@ -52,7 +92,7 @@ export function registerSceneTools(server: McpServer, logger?: ToolLogger) {
 - template: 项目绑定的模板标识（如 "drainage-real"），未设置时为 null
 - sceneData: 场景根节点 + children[] 树形结构，每个节点含 uuid、name、type、visible 等字段`,
       inputSchema: {
-        projectId: z.string().describe("连接 ID（编辑器 MCP 连接时输入），可通过 get_connected_projects 获取"),
+        projectId: z.string().describe("连接 ID（编辑器 MCP 连接时输入，由用户主动提供，可先用 verify_project 验证）"),
       },
     },
     async ({ projectId }) => {

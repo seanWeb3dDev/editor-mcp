@@ -161,6 +161,13 @@ export function getConnectedProjects(): string[] {
 }
 
 /**
+ * 检查指定连接 ID 是否有已连接的编辑器（仅查表，不发送命令）
+ */
+export function isProjectConnected(projectId: string): boolean {
+  return connectedEditors.has(projectId);
+}
+
+/**
  * 向指定项目发送命令并等待响应
  * @param timeoutMs 超时毫秒数，默认 10000，最长建议 300000（5 分钟）
  */
